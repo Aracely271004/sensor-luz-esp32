@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Sensor de Luz</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }
+    h1 { text-align: center; color: #e0c97f; margin-bottom: 5px; }
+    p.sub { text-align: center; color: #aaa; margin-bottom: 20px; }
+    .card { background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+    .grafica-container { position: relative; height: 300px; }
+    table { width: 100%; border-collapse: collapse; }
+    th { background: #0f3460; padding: 12px; text-align: center; color: #e0c97f; }
+    td { padding: 10px; text-align: center; border-bottom: 1px solid #0f3460; }
+    tr:hover { background: #0f3460; }
+    .badge { padding: 4px 12px; border-radius: 20px; font-weight: bold; font-size: 13px; }
+    .resumen { display: flex; gap: 15px; justify-content: center; margin-bottom: 20px; flex-wrap: wrap; }
+    .stat { background: #16213e; border-radius: 10px; padding: 15px 25px; text-align: center; min-width: 140px; }
+    .stat h3 { font-size: 28px; color: #e0c97f; }
+    .stat p { color: #aaa; font-size: 13px; }
+    .filtros { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 15px; }
+    .filtros label { color: #aaa; font-size: 13px; display: block; margin-bottom: 4px; }
+    .filtros input, .filtros select {
+      background: #0f3460; border: 1px solid #e0c97f44;
+      color: #eee; padding: 8px 12px; border-radius: 8px; font-size: 14px;
+    }
+    .btn {
+      padding: 8px 20px; border-radius: 8px; border: none;
+      cursor: pointer; font-size: 14px; font-weight: bold;
+    }
+    .btn-primary { background: #e0c97f; color: #1a1a2e; }
+    .btn-secondary { background: #0f3460; color: #eee; }
+  </style>
+</head>
+<body>
+  <h1>📡 Sensor de Luz - Tiempo Real</h1>
+  <p class="sub">Hora Perú (UTC-5)</p>
+<!-- Control del sensor -->
+<div style="text-align:center; margin-bottom:20px">
+  <button id="btn-sensor" class="btn btn-primary" 
+    onclick="toggleSensor()" style="font-size:16px; padding:12px 30px">
+    ⏸ Pausar Sensor
+  </button>
+<button id="btn-sleep" class="btn" 
+  onclick="toggleSleep()" 
+  style="font-size:16px; padding:12px 30px; background:#9b59b6; color:white; border:none; border-radius:8px; cursor:pointer; margin-left:10px">
+  😴 Modo Deep Sleep(apagado)
+</button>
+<p id="estado-sleep" style="color:#aaa; margin-top:8px">Modo: Despierto</p>
+  <p id="estado-sensor" style="color:#aaa; margin-top:8px">Estado: Activo</p>
+</div>
+
+  <!-- Tarjetas resumen -->
+  <div class="resumen">
+    <div class="stat"><h3 id="ultimo-valor">--</h3><p>Último valor</p></div>
+    <div class="stat"><h3 id="ultimo-estado">--</h3><p>Estado actual</p></div>
+    <div class="stat"><h3 id="total-registros">--</h3><p>Registros filtrados</p></div>
+    <div class="stat"><h3 id="promedio">--</h3><p>Promedio</p></div>
+  </div>
+
+  <!-- Filtros -->
+  <div class="card">
+    <h2 style="color:#e0c97f; margin-bottom:15px">🔍 Filtrar por tiempo</h2>
+    <div class="filtros">
+      <div>
+        <label>Rango rápido</label>
+        <select id="rango-rapido" onchange="aplicarRangoRapido()">
+          <option value="">Personalizado</option>
+          <option value="30">Últimos 30 minutos</option>
+          <option value="60">Última 1 hora</option>
+          <option value="120">Últimas 2 horas</option>
+          <option value="360">Últimas 6 horas</option>
+          <option value="720">Últimas 12 horas</option>
+          <option value="1440">Último día</option>
+        </select>
+      </div>
+      <div>
+        <label>Desde</label>
+        <input type="datetime-local" id="desde">
+      </div>
+      <div>
+        <label>Hasta</label>
+        <input type="datetime-local" id="hasta">
+      </div>
+      <button class="btn btn-primary" onclick="cargarDatos()">Aplicar</button>
+      <button class="btn btn-secondary" onclick="limpiarFiltros()">Ver todo</button>
+    </div>
+  </div>
+
+  <!-- Gráfica -->
+  <div class="card">
+    <h2 style="color:#e0c97f; margin-bottom:15px">📈 Gráfica</h2>
+    <div class="grafica-container">
+      <canvas id="grafica"></canvas>
+    </div>
+  </div>
+
+  <!-- Tabla -->
+  <div class="card">
+    <h2 style="color:#e0c97f; margin-bottom:15px">📋 Historial</h2>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Hora</th><th>Analógico</th><th>Estado</th></tr>
+      </thead>
+      <tbody id="tabla"></tbody>
+    </table>
+  </div>
+
+  <script>
+    const ctx = document.getElementById('grafica').getContext('2d');
+    const grafica = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+datasets: [{
+  label: 'Nivel de Luz',
+  data: [],
+  borderColor: '#57cc99',
+  backgroundColor: 'rgba(87,204,153,0.05)',
+  borderWidth: 2,
+  pointRadius: 5,
+  pointBackgroundColor: [],
+  pointBorderColor: [],
+  pointBorderWidth: 2,
+  fill: true,
+  tension: 0.4,
+  spanGaps: false
+}]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          y: { min: 0, max: 4095, ticks: { color: '#aaa' }, grid: { color: '#0f3460' } },
+          x: { ticks: { color: '#aaa', maxTicksLimit: 12 }, grid: { color: '#0f3460' } }
+        },
+        plugins: { legend: { labels: { color: '#eee' } } }
+      }
+    });
+
+    function colorEstado(estado) {
+      if (estado === 'No hay luz')  return '#888';
+      if (estado === 'Poca luz')    return '#f4a261';
+      if (estado === 'Luz regular') return '#57cc99';
+      if (estado === 'Mucha luz')   return '#ffd60a';
+      return '#fff';
+    }
+function colorPorValor(v) {
+  if (v < 500)  return '#888';
+  if (v < 1500) return '#f4a261';
+  if (v < 2800) return '#57cc99';
+  return '#ffd60a';
+}
+    function aplicarRangoRapido() {
+      const minutos = document.getElementById('rango-rapido').value;
+      if (!minutos) return;
+      const hasta = new Date();
+      const desde = new Date(hasta.getTime() - minutos * 60000);
+      document.getElementById('desde').value = toDatetimeLocal(desde);
+      document.getElementById('hasta').value = toDatetimeLocal(hasta);
+      cargarDatos();
+    }
+
+    function toDatetimeLocal(date) {
+      return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+        .toISOString().slice(0, 16);
+    }
+
+    function limpiarFiltros() {
+      document.getElementById('desde').value = '';
+      document.getElementById('hasta').value = '';
+      document.getElementById('rango-rapido').value = '';
+      cargarDatos();
+    }
+
+    function cargarDatos() {
+      const desde = document.getElementById('desde').value;
+      const hasta = document.getElementById('hasta').value;
+      let url = '/datos';
+      const params = [];
+      if (desde) params.push('desde=' + new Date(desde).toISOString());
+      if (hasta) params.push('hasta=' + new Date(hasta).toISOString());
+      if (params.length) url += '?' + params.join('&');
+
+      fetch(url)
+        .then(res => res.json())
+        .then(historial => {
+          if (!historial.length) {
+            document.getElementById('tabla').innerHTML =
+              '<tr><td colspan="4" style="color:#aaa">Sin datos en este rango</td></tr>';
+            return;
+          }
+
+          // Tarjetas
+          const ultimo = historial[0];
+          document.getElementById('ultimo-valor').textContent = ultimo.analogico;
+          document.getElementById('ultimo-estado').textContent = ultimo.estado;
+          document.getElementById('total-registros').textContent = historial.length;
+          const prom = Math.round(historial.reduce((s, d) => s + d.analogico, 0) / historial.length);
+          document.getElementById('promedio').textContent = prom;
+	// Gráfica con colores según nivel y cortes
+const filtroActivo = document.getElementById('desde').value || 
+                     document.getElementById('hasta').value;
+
+let muestra;
+if (filtroActivo) {
+  // Con filtro: mostrar todos los datos del rango
+  const paso = Math.max(1, Math.floor(historial.length / 100));
+  muestra = historial.filter((_, i) => i % paso === 0).reverse();
+} else {
+  // Sin filtro: tiempo real con últimos 50
+  muestra = historial.slice(0, 50).reverse();
+}
+const labels = [];
+const puntos = [];
+const coloresPuntos = [];
+
+for (let i = 0; i < muestra.length; i++) {
+  const actual = muestra[i];
+  const anterior = muestra[i - 1];
+
+  if (anterior) {
+    const diff = new Date(actual.timestamp).getTime() -
+                 new Date(anterior.timestamp).getTime();
+    if (diff > 10000) {
+      labels.push('');
+      puntos.push(null);
+      coloresPuntos.push('transparent');
+    }
+  }
+
+  labels.push(actual.hora.split(', ')[1] || actual.hora);
+  puntos.push(actual.analogico);
+  coloresPuntos.push(colorPorValor(actual.analogico));
+}
+
+// Mantener siempre 50 slots para que la gráfica no salte
+if (!filtroActivo) {
+  while (labels.length < 50) {
+    labels.unshift('');
+    puntos.unshift(null);
+    coloresPuntos.unshift('transparent');
+  }
+}
+grafica.data.labels = labels;
+grafica.data.datasets[0].data = puntos;
+grafica.data.datasets[0].pointBackgroundColor = coloresPuntos;
+grafica.data.datasets[0].pointBorderColor = coloresPuntos;
+grafica.update('none'); // 'none' evita animación para que se vea fluido
+        // Tabla
+          const tabla = document.getElementById('tabla');
+          tabla.innerHTML = '';
+	    historial.slice(0, 50).forEach((dato, i) => {
+            const color = colorEstado(dato.estado);
+            tabla.innerHTML += `
+              <tr>
+                <td>${i + 1}</td>
+                <td>${dato.hora}</td>
+                <td>${dato.analogico}</td>
+                <td><span class="badge" style="background:${color}22;color:${color}">${dato.estado}</span></td>
+              </tr>`;
+          });
+        });
+    }
+
+    // Auto actualización solo si no hay filtro activo
+    cargarDatos();
+    setInterval(() => {
+      const desde = document.getElementById('desde').value;
+      const hasta = document.getElementById('hasta').value;
+      if (!desde && !hasta) cargarDatos();
+    }, 1000);
+let sensorActivo = true;
+
+function toggleSensor() {
+  sensorActivo = !sensorActivo;
+  const estado = sensorActivo ? 'activo' : 'pausado';
+  fetch('/estado', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ estado })
+  }).then(() => actualizarBoton());
+}
+
+function actualizarBoton() {
+  const btn = document.getElementById('btn-sensor');
+  const txt = document.getElementById('estado-sensor');
+  if (sensorActivo) {
+    btn.textContent = '⏸ Pausar Sensor';
+    btn.style.background = '#e0c97f';
+    txt.textContent = 'Estado: Activo ✅';
+    txt.style.color = '#57cc99';
+  } else {
+    btn.textContent = '▶ Reanudar Sensor';
+    btn.style.background = '#f4a261';
+    txt.textContent = 'Estado: Pausado ⏸';
+    txt.style.color = '#f4a261';
+  }
+}
+
+// Verificar estado al cargar la página
+fetch('/estado')
+  .then(res => res.json())
+  .then(data => {
+    sensorActivo = data.estado === 'activo';
+    actualizarBoton();
+  });
+let modoSleep = false;
+
+function toggleSleep() {
+  modoSleep = !modoSleep;
+  const comando = modoSleep ? 'dormir' : 'despierto';
+  fetch('/comando', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ comando })
+  }).then(() => actualizarBotoSleep());
+}
+
+function actualizarBotoSleep() {
+  const btn = document.getElementById('btn-sleep');
+  const txt = document.getElementById('estado-sleep');
+  if (modoSleep) {
+    btn.textContent = '⏰ Despertar ESP32';
+    btn.style.background = '#27ae60';
+    txt.textContent = 'Modo: Deep Sleep 😴 (se despierta cada 30 seg)';
+    txt.style.color = '#9b59b6';
+  } else {
+    btn.textContent = '😴 Modo Deep Sleep';
+    btn.style.background = '#9b59b6';
+    txt.textContent = 'Modo: Despierto ✅';
+    txt.style.color = '#57cc99';
+  }
+}
+
+// Verificar estado al cargar
+fetch('/comando')
+  .then(res => res.json())
+  .then(data => {
+    modoSleep = data.comando === 'dormir';
+    actualizarBotoSleep();
+  });
+  </script>
+</body>
+</html>
